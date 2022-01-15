@@ -1,1 +1,1 @@
-docker build --platform=linux/amd64 -t tonwhales/ton-compiler-service:v1 .
+docker build --platform=linux/amd64 -t tonwhales/ton-compiler-service:v2 .

@@ -5,7 +5,13 @@ import tmp from 'tmp';
 import path from 'path';
 
 async function handleCommand(command: string, args: string[]): Promise<{ stdout: string, stderr: string, code: number }> {
-    let res = await execa(command, args, { timeout: 15000, reject: false });
+    let res = await execa(command, args, {
+        timeout: 15000,
+        reject: false,
+        env: {
+            FIFTPATH: path.resolve(__dirname, '..', 'libs')
+        }
+    });
     if (res.timedOut) {
         throw new Error('Timed out');
     }
@@ -34,7 +40,7 @@ async function createTempFile(prefix: string, suffix: string) {
     app.get('/', (req, res) => {
         res.send('Welcome to TON compiler!');
     });
-    app.post('/compile/func', express.json(), (req, res) => {
+    app.post('/compile', express.json(), (req, res) => {
         (async () => {
             try {
                 let body = req.body as {
@@ -44,6 +50,8 @@ async function createTempFile(prefix: string, suffix: string) {
 
                 const codeFile = await createTempFile('contract', '.fc');
                 const outputFile = await createTempFile('compiled', '.fif');
+                const fifProgramFile = await createTempFile('script', '.fif');
+                const outputCellFile = await createTempFile('compiled', '.cell');
                 try {
                     // Prepare arguments
                     fs.writeFileSync(codeFile.fd, body.code, 'utf-8');
@@ -53,7 +61,7 @@ async function createTempFile(prefix: string, suffix: string) {
                     args.push(outputFile.name);
                     for (let lib of body.libs) {
                         if (lib === 'stdlib') {
-                            args.push(path.resolve(__dirname, '..', 'stdlib.fc'));
+                            args.push(path.resolve(__dirname, '..', 'libs', 'stdlib.fc'));
                         } else {
                             throw Error('Invalid library: ' + lib);
                         }
@@ -62,21 +70,55 @@ async function createTempFile(prefix: string, suffix: string) {
 
                     // Compile
                     let compiled = await handleCommand('/usr/src/crypto/func', args);
+                    let stdout = compiled.stdout;
+                    let stderr = compiled.stderr;
+                    let code = compiled.code;
 
                     // Prepare fift
                     let fift = fs.readFileSync(outputFile.fd, 'utf-8');
                     if (fift.indexOf('\n') >= 0) {
                         fift = fift.slice(fift.indexOf('\n') + 1); // Remove first line
                     }
+                    if (fift.endsWith('\n')) {
+                        fift = fift.slice(0, fift.length - 1);
+                    }
+
+                    // Fift compilation
+                    let cell: Buffer | null = null;
+                    if (code === 0) {
+                        let fiftProgram = '"Asm.fif" include\n';
+                        fiftProgram += fift + '\n';
+                        fiftProgram += `boc>B "${outputCellFile.name}" B>file`;
+                        fs.writeFileSync(fifProgramFile.fd, fiftProgram, 'utf-8');
+                        let compiledFift = await handleCommand('/usr/src/crypto/fift', [fifProgramFile.name]);
+
+                        code = compiledFift.code;
+                        if (stdout !== '') {
+                            stdout += '\n';
+                        }
+                        stdout += compiledFift.stdout;
+                        if (stderr !== '') {
+                            stderr += '\n';
+                        }
+                        stderr += compiledFift.stderr;
+
+                        if (code === 0) {
+                            cell = fs.readFileSync(outputCellFile.fd);
+                        }
+                    }
 
                     res.status(200).send({
-                        exit_code: compiled.code,
-                        stderr: compiled.stderr,
-                        stdout: compiled.stdout,
-                        fift
+                        exit_code: code,
+                        stderr: stderr,
+                        stdout: stdout,
+                        fift,
+                        cell: cell ? cell.toString('base64') : null
                     });
                 } finally {
                     codeFile.removeCallback();
+                    outputFile.removeCallback();
+                    fifProgramFile.removeCallback();
+                    outputCellFile.removeCallback();
                 }
             } catch (e) {
                 console.warn(e);

@@ -1,1 +1,1 @@
-docker run --platform linux/amd64 -p 3000:3000 tonwhales/ton-compiler-service:v1
+docker run --platform linux/amd64 -p 3000:3000 tonwhales/ton-compiler-service:v2
